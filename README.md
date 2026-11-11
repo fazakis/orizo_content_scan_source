@@ -1,4 +1,17 @@
-# content scan service
+# Orizo content scan — public corresponding source
+
+This repository was renamed from `gymapp_content_scan_source` to
+`orizo_content_scan_source`. It is the public AGPL corresponding-source mirror
+of the private **`gymapp_content_scan`** repository, not a separate service or
+independently maintained implementation. The private repository remains the
+source and deployment owner; production configuration and credentials are never
+mirrored here.
+
+The private release gate requires byte-for-byte equality of `app.py`, `labels.py`,
+`prompts.py`, `test_prompts.py`, `requirements.txt`,
+`requirements-second-opinion.txt`, `Dockerfile` and `LICENSE`, and rejects extra
+tracked files other than this README. Changes to mirrored files must be paired
+with the private source. README text may differ to describe each repository's role.
 
 A classifier on its own box. Bytes in, category scores out. No database, no
 credentials, no storage access, nothing persisted.
@@ -44,7 +57,7 @@ closed software call an AGPL database over a socket.
    source to anyone interacting with this over a network. `GET /source` serves
    that offer, unauthenticated — an offer only visible to holders of our token
    is not an offer. The canonical public mirror is
-   <https://github.com/fazakis/gymapp_content_scan_source>.
+   <https://github.com/fazakis/orizo_content_scan_source>.
 
 **This is not legal advice.** The arrangement was chosen on that basis; if you
 intend to rely on it, have a lawyer confirm it.
