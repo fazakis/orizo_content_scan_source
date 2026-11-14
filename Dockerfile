@@ -56,4 +56,6 @@ EXPOSE 8099
 # the image you built; past that, add a box because the app side accepts a
 # comma-separated list of instances.
 ENV CONTENT_SCAN_WORKERS=1
-CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 8099 --workers ${CONTENT_SCAN_WORKERS}"]
+# Bound admitted connections/tasks per worker and the kernel accept queue.
+# Overload is HTTP 503, never a successful empty/clean classification.
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 8099 --workers ${CONTENT_SCAN_WORKERS} --limit-concurrency 4 --backlog 32 --timeout-keep-alive 5"]
