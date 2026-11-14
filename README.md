@@ -1,6 +1,6 @@
 # Orizo content scan
 
-The image classifier behind Orizo's content safety checks. This repository is the corresponding source of the running service, offered under section 13 of the GNU Affero General Public License. The service points here from `GET /source`.
+An open-source, standalone image classification service for content safety. Run it locally or deploy your own HTTP service. It is licensed under the GNU Affero General Public License, version 3 or later.
 
 It takes one image and returns category scores. It makes no decisions and keeps nothing.
 
@@ -24,4 +24,4 @@ An optional second stage is off by default. To include it, also install `require
 
 ## License
 
-AGPL-3.0-or-later. See `LICENSE`.
+AGPL-3.0-or-later. See `LICENSE`. The unauthenticated `GET /source` endpoint offers the corresponding source. If you deploy a modified version, set `CONTENT_SCAN_SOURCE_URL` to the publicly available corresponding source for that version.
