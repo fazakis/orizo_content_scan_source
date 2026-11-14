@@ -1,13 +1,4 @@
-"""The classifier service.
-
-Runs on its own box, reachable only over the private network. It holds no
-credentials, touches no database, and stores nothing: bytes in, scores out.
-That is deliberate -- it is the component most likely to be replaced, and the
-one whose compromise should cost the least.
-
-Run:
-    CONTENT_SCAN_TOKEN=... uvicorn app:app --host <tailnet-ip> --port 8099
-"""
+"""Image classifier service: one image in, category scores out."""
 from __future__ import annotations
 
 import logging
@@ -33,9 +24,7 @@ app = FastAPI(title='content scan', docs_url=None, redoc_url=None)
 _detector = None
 _clip = None
 
-# The band the first pass cannot call. Only these images cost a second model.
-# OFF by default: with the part-level taxonomy back, the second stage is a
-# tuning lever rather than a necessity, and it doubles resident memory.
+# Optional second stage, off by default.
 SECOND_OPINION = os.environ.get('CONTENT_SCAN_SECOND_OPINION', '') == '1'
 SECOND_OPINION_LOW = float(os.environ.get('CONTENT_SCAN_SECOND_OPINION_LOW', '0.30'))
 SECOND_OPINION_HIGH = float(os.environ.get('CONTENT_SCAN_SECOND_OPINION_HIGH', '0.97'))
@@ -52,27 +41,15 @@ if not 0 <= SECOND_OPINION_RAISE_CAP < 0.90:
 
 MODEL_ID = os.environ.get('CONTENT_SCAN_MODEL', 'nudenet')
 
-# AGPL section 13 obliges us to offer the source of THIS service to anyone
-# interacting with it over a network. Served from the service itself so the
-# offer travels with the running code rather than living in a README nobody
-# reaching the API can see.
+# Source offer (AGPL-3.0 section 13), served from GET /source.
 SOURCE_URL = os.environ.get(
     'CONTENT_SCAN_SOURCE_URL',
-    'https://github.com/fazakis/gymapp_content_scan_source',
+    'https://github.com/fazakis/orizo_content_scan_source',
 )
 
 
 def detector():
-    """Loaded once, on first use.
-
-    Resident rather than per-request: loading costs seconds and inference costs
-    milliseconds, so a per-request load would make the model load the entire
-    cost of the service.
-
-    AGPL-3.0, deliberately: the part-level taxonomy is worth more than any
-    permissively-licensed single-score alternative, and the cost of keeping it
-    is publishing this directory. See LICENSE and README.md.
-    """
+    """The detector, loaded once on first use."""
     global _detector
     if _detector is None:
         from nudenet import NudeDetector
@@ -83,11 +60,7 @@ def detector():
 
 
 def clip():
-    """CLIP, loaded lazily and only if the second stage is ever reached.
-
-    MIT licensed, code and weights, and it runs here -- it is a downloadable
-    model, not an API call, so no image leaves this box.
-    """
+    """The optional second-stage model, loaded on first use."""
     global _clip
     if _clip is None:
         from transformers import CLIPModel, CLIPProcessor
@@ -100,12 +73,7 @@ def clip():
 
 
 def second_opinion(image) -> float | None:
-    """Score the image against our own prompts. None if it could not be done.
-
-    The primary taxonomy remains the detector's exposed/covered body-part
-    labels. These prompts are an optional fitness-specific tiebreaker for an
-    ambiguous explicit score. See prompts.py.
-    """
+    """Second-stage score for the image, or None if it could not be computed."""
     try:
         import torch
 
@@ -114,8 +82,6 @@ def second_opinion(image) -> float | None:
         with torch.no_grad():
             probs = model(**inputs).logits_per_image.softmax(dim=1)[0].tolist()
     except Exception as exc:
-        # Never fatal: the first pass already produced a usable score, and a
-        # broken tiebreaker must not turn a working scan into a failed one.
         logger.warning('second opinion failed: %s', exc)
         return None
     score = unsafe_confidence(probs)
@@ -124,30 +90,19 @@ def second_opinion(image) -> float | None:
 
 @app.get('/source')
 def source():
-    """Where to get this service's source.
-
-    Required by AGPL section 13: anyone interacting with this over a network is
-    entitled to the corresponding source. Unauthenticated on purpose -- an offer
-    only visible to people holding our token is not an offer.
-    """
+    """Where to get this service's source (AGPL-3.0 section 13)."""
     return {'source': SOURCE_URL, 'license': 'AGPL-3.0-or-later'}
 
 
 @app.get('/health')
 def health():
-    """Liveness only. Deliberately does NOT load the model: a health check that
-    pulls 600 MB into memory turns a monitoring poll into an outage."""
+    """Liveness. Does not load the model."""
     return {'ok': True}
 
 
 @app.get('/ready')
 def ready():
-    """Load every configured model before accepting traffic.
-
-    In particular, setting CONTENT_SCAN_SECOND_OPINION on the default image is
-    a deployment error. Readiness exposes the missing optional dependencies or
-    weights instead of claiming success and silently degrading every request.
-    """
+    """Loads every configured model; fails if one cannot be loaded."""
     try:
         detector()
         if SECOND_OPINION:
@@ -169,9 +124,6 @@ async def classify(request: Request, authorization: str = Header(default='')):
         if not credentials_match(authorization, TOKEN):
             raise HTTPException(status_code=401, detail='bad token')
     else:
-        # Refuses to run open. The tailnet is the first line, but a service that
-        # would happily answer anyone who reaches it is one firewall mistake
-        # away from being a public nudity-detection API on our bill.
         raise HTTPException(status_code=503, detail='CONTENT_SCAN_TOKEN is not set')
 
     chunks = []
@@ -190,43 +142,29 @@ async def classify(request: Request, authorization: str = Header(default='')):
 
     from PIL import Image
 
-    # Decoded in memory and never written to disk: nothing about a user's photo
-    # outlives the request, which is what makes this box safe to run elsewhere.
+    # Only these formats are parsed.
     try:
-        # Only the formats the backend sends: without ``formats`` Pillow tries
-        # every parser it has (TIFF, BMP, EPS...) on whatever arrives.
         image = Image.open(io.BytesIO(body), formats=['JPEG', 'PNG', 'WEBP', 'GIF'])
         if image.width <= 0 or image.height <= 0 or image.width * image.height > 40_000_000:
             raise ValueError('Image dimensions exceed the decoding limit.')
         image.load()
         image = image.convert('RGB')
     except Exception as exc:
-        # A file we cannot decode is a bad request, not a scanner failure --
-        # distinguishing them matters because the caller turns a scanner
-        # failure into "uncertain" and a bad request into an upload error.
         logger.warning('undecodable image: %s', exc)
         raise HTTPException(status_code=400, detail='could not decode image') from exc
 
-    # The detector reads from a path. Written to a temp file removed on exit --
-    # nothing about a user's photo outlives the request, which is what makes
-    # this box safe to run somewhere else.
+    # The detector reads from a path: a temporary file, removed on exit.
     try:
         with tempfile.NamedTemporaryFile(suffix='.jpg') as handle:
             image.save(handle, format='JPEG')
             handle.flush()
             predictions = detector().detect(handle.name)
     except Exception as exc:
-        # 502, not 200-with-empty-scores: the caller must be able to tell
-        # "nothing found" from "nothing looked", because those become
-        # different verdicts.
         logger.warning('detection failed: %s', exc)
         raise HTTPException(status_code=502, detail='detector failed') from exc
 
     categories = categories_from_detections(predictions)
 
-    # Second stage, on the middle band only. A confident call from the first
-    # pass is left alone -- paying for a tiebreaker on an obvious image would
-    # cost 10x the compute to change nothing.
     first = categories.get('explicit', 0.0)
     if SECOND_OPINION and SECOND_OPINION_LOW <= first < SECOND_OPINION_HIGH:
         refined = second_opinion(image)
@@ -237,7 +175,5 @@ async def classify(request: Request, authorization: str = Header(default='')):
                 raise_cap=SECOND_OPINION_RAISE_CAP,
             )
             logger.info('second opinion: %.2f -> %.2f', first, categories['explicit'])
-    # Never log the image, its bytes, or a path that outlives the request. The
-    # count is enough to tell a working service from a silent one.
     logger.info('classified: %d predictions, %d actionable', len(predictions or []), len(categories))
     return {'categories': categories}
