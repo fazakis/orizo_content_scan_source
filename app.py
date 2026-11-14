@@ -58,7 +58,7 @@ MODEL_ID = os.environ.get('CONTENT_SCAN_MODEL', 'nudenet')
 # reaching the API can see.
 SOURCE_URL = os.environ.get(
     'CONTENT_SCAN_SOURCE_URL',
-    'https://github.com/fazakis/orizo_content_scan_source',
+    'https://github.com/fazakis/gymapp_content_scan_source',
 )
 
 
@@ -157,10 +157,16 @@ def ready():
     return {'ok': True}
 
 
+def credentials_match(authorization: str, token: str) -> bool:
+    """Compare bytes so malformed non-ASCII headers fail authentication safely."""
+    return bool(token) and secrets.compare_digest(
+        authorization.encode('utf-8'), f'Bearer {token}'.encode('utf-8'))
+
+
 @app.post('/classify')
 async def classify(request: Request, authorization: str = Header(default='')):
     if TOKEN:
-        if not secrets.compare_digest(authorization, f'Bearer {TOKEN}'):
+        if not credentials_match(authorization, TOKEN):
             raise HTTPException(status_code=401, detail='bad token')
     else:
         # Refuses to run open. The tailnet is the first line, but a service that
@@ -187,7 +193,11 @@ async def classify(request: Request, authorization: str = Header(default='')):
     # Decoded in memory and never written to disk: nothing about a user's photo
     # outlives the request, which is what makes this box safe to run elsewhere.
     try:
-        image = Image.open(io.BytesIO(body))
+        # Only the formats the backend sends: without ``formats`` Pillow tries
+        # every parser it has (TIFF, BMP, EPS...) on whatever arrives.
+        image = Image.open(io.BytesIO(body), formats=['JPEG', 'PNG', 'WEBP', 'GIF'])
+        if image.width <= 0 or image.height <= 0 or image.width * image.height > 40_000_000:
+            raise ValueError('Image dimensions exceed the decoding limit.')
         image.load()
         image = image.convert('RGB')
     except Exception as exc:
